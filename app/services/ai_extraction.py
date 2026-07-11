@@ -20,6 +20,11 @@ Rules:
   the text.
 - "date" must be a string, formatted YYYY-MM-DD if the source format allows it.
 - "total", and each line item's "quantity"/"unit_price"/"amount", must be numbers, not strings.
+- Only include "subtotal", "tax_amount", "discount_amount", or
+  "adjustment_amount" if the document states that figure separately from
+  the final total (e.g. a printed "Subtotal", "GST", "Tax", "Discount", or
+  "Less: Advance Paid" line). Leave them out entirely for a simple invoice
+  with no such breakdown — do not guess or back-calculate them.
 """
 
 

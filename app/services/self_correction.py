@@ -7,7 +7,11 @@ from app.services.validation import validate_invoice
 # 1 initial attempt + 2 retries, per spec: "capped at 2 retries."
 MAX_ATTEMPTS = 3
 
-_INVOICE_FIELD_NAMES = ("invoice_number", "date", "vendor", "line_items", "total")
+_REQUIRED_FIELD_NAMES = ("invoice_number", "date", "vendor", "line_items", "total")
+# Only scored when the LLM actually extracted them — an invoice with no
+# tax breakdown shouldn't get a confidence score for a "tax_amount" field
+# that was never populated.
+_OPTIONAL_FIELD_NAMES = ("subtotal", "tax_amount", "discount_amount", "adjustment_amount")
 
 # Confidence heuristic, not real per-token probabilities: Groq's JSON-mode
 # structured output doesn't reliably expose logprobs mappable back to
@@ -76,6 +80,7 @@ async def run_invoice_self_correction(raw_text: str) -> InvoiceExtractionOutcome
                 attempt_number=attempt_number,
                 needs_review=False,
                 implicated_fields=implicated_fields,
+                fields=last_parsed,
             )
             return InvoiceExtractionOutcome(
                 fields=last_parsed,
@@ -89,7 +94,10 @@ async def run_invoice_self_correction(raw_text: str) -> InvoiceExtractionOutcome
 
     confidence = (
         _score_confidence(
-            attempt_number=MAX_ATTEMPTS, needs_review=True, implicated_fields=implicated_fields
+            attempt_number=MAX_ATTEMPTS,
+            needs_review=True,
+            implicated_fields=implicated_fields,
+            fields=last_parsed,
         )
         if last_parsed is not None
         else None
@@ -100,10 +108,13 @@ async def run_invoice_self_correction(raw_text: str) -> InvoiceExtractionOutcome
 
 
 def _score_confidence(
-    *, attempt_number: int, needs_review: bool, implicated_fields: set[str]
+    *, attempt_number: int, needs_review: bool, implicated_fields: set[str], fields: InvoiceFields
 ) -> dict[str, float]:
     base = _NEEDS_REVIEW_CONFIDENCE if needs_review else _CONFIDENCE_BY_ATTEMPT[attempt_number]
+    present_fields = [*_REQUIRED_FIELD_NAMES] + [
+        name for name in _OPTIONAL_FIELD_NAMES if getattr(fields, name) is not None
+    ]
     return {
         name: round(base * _IMPLICATED_FIELD_PENALTY, 2) if name in implicated_fields else base
-        for name in _INVOICE_FIELD_NAMES
+        for name in present_fields
     }

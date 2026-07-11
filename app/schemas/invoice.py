@@ -22,4 +22,24 @@ class InvoiceFields(BaseModel):
     date: str = Field(description="Invoice date as YYYY-MM-DD if determinable")
     vendor: str
     line_items: list[LineItem]
+    subtotal: float | None = Field(
+        default=None,
+        description="Sum of line items before tax/discount/adjustments, only if the "
+        "document states it separately from the total",
+    )
+    tax_amount: float | None = Field(
+        default=None, description="Total tax (e.g. GST/VAT), only if stated separately"
+    )
+    discount_amount: float | None = Field(
+        default=None, description="Total discount, only if stated separately"
+    )
+    adjustment_amount: float | None = Field(
+        default=None,
+        description="Net signed adjustment applied before the final total (e.g. an advance "
+        "payment deducted, or a previous balance credited). Negative reduces the total, "
+        "positive increases it. Only if the document states one.",
+    )
+    adjustment_description: str | None = Field(
+        default=None, description="Short description of what adjustment_amount represents"
+    )
     total: float

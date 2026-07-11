@@ -50,3 +50,28 @@ def test_multiple_failures_are_all_reported() -> None:
 
     fields_with_errors = {field for field, _ in errors}
     assert fields_with_errors == {"total", "date"}
+
+
+def test_invoice_with_tax_and_adjustments_that_reconcile_has_no_errors() -> None:
+    # line items sum to 20.0 (the default fixture); subtotal matches, and
+    # 20.0 + 3.6 tax - 0 discount - 5.0 adjustment = 18.6
+    errors = validate_invoice(
+        _invoice(subtotal=20.0, tax_amount=3.6, adjustment_amount=-5.0, total=18.6)
+    )
+
+    assert errors == []
+
+
+def test_invoice_with_subtotal_not_matching_line_items_is_flagged() -> None:
+    errors = validate_invoice(_invoice(subtotal=50.0, total=50.0))
+
+    assert len(errors) == 1
+    assert errors[0][0] == "subtotal"
+
+
+def test_invoice_with_tax_math_that_doesnt_reconcile_is_still_flagged() -> None:
+    # subtotal matches line items, but total ignores the stated tax
+    errors = validate_invoice(_invoice(subtotal=20.0, tax_amount=3.6, total=20.0))
+
+    assert len(errors) == 1
+    assert errors[0][0] == "total"
