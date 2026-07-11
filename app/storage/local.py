@@ -16,6 +16,9 @@ class LocalFilesystemStorage(StorageBackend):
         # story for callers.
         await asyncio.to_thread(self._write, key, content)
 
+    async def read(self, key: str) -> bytes:
+        return await asyncio.to_thread((self._root / key).read_bytes)
+
     async def exists(self, key: str) -> bool:
         return await asyncio.to_thread(lambda: (self._root / key).exists())
 

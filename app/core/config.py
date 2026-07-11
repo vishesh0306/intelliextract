@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     s3_bucket_name: str | None = None
     aws_region: str | None = None
 
+    # Only needed on hosts where tesseract isn't on PATH (e.g. Windows dev
+    # boxes); the Docker image installs it via apt and needs no override.
+    tesseract_cmd: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

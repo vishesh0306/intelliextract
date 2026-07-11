@@ -15,8 +15,15 @@ class S3Storage(StorageBackend):
         # boto3 is sync-only; run it off the event loop rather than block it.
         await asyncio.to_thread(self._client.put_object, Bucket=self._bucket, Key=key, Body=content)
 
+    async def read(self, key: str) -> bytes:
+        return await asyncio.to_thread(self._get_object, key)
+
     async def exists(self, key: str) -> bool:
         return await asyncio.to_thread(self._head_object, key)
+
+    def _get_object(self, key: str) -> bytes:
+        response = self._client.get_object(Bucket=self._bucket, Key=key)
+        return response["Body"].read()
 
     def _head_object(self, key: str) -> bool:
         try:
