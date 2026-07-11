@@ -1,5 +1,6 @@
 import enum
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -22,3 +23,11 @@ class DocumentType(enum.StrEnum):
 class DocumentUploadResponse(BaseModel):
     job_id: uuid.UUID
     status: JobStatus
+
+
+class JobStatusResponse(BaseModel):
+    job_id: uuid.UUID
+    status: JobStatus
+    document_type: str
+    created_at: datetime
+    updated_at: datetime

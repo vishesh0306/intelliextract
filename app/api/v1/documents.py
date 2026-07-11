@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
@@ -8,9 +9,11 @@ from app.api.deps import enforce_rate_limit
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import ApiKey, Job, JobStatus
-from app.schemas.document import DocumentType, DocumentUploadResponse
+from app.schemas.document import DocumentType, DocumentUploadResponse, JobStatusResponse
 from app.services.file_validation import EXTENSION_BY_CONTENT_TYPE, sniff_content_type
 from app.storage.factory import get_storage_backend
+from app.worker.queue import get_task_queue
+from app.worker.tasks import process_document
 
 router = APIRouter()
 
@@ -69,4 +72,27 @@ async def upload_document(
     db.add(job)
     await db.commit()
 
+    get_task_queue().enqueue(process_document, str(job.id))
+
     return DocumentUploadResponse(job_id=job.id, status=job.status)
+
+
+@router.get("/documents/{job_id}", response_model=JobStatusResponse)
+async def get_document(
+    job_id: uuid.UUID,
+    api_key: Annotated[ApiKey, Depends(enforce_rate_limit)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> JobStatusResponse:
+    job = await db.get(Job, job_id)
+    if job is None or job.api_key_id != api_key.id:
+        # Same 404 either way — confirming a job ID belongs to someone
+        # else's key is itself an information leak.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    return JobStatusResponse(
+        job_id=job.id,
+        status=job.status,
+        document_type=job.document_type,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
