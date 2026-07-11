@@ -22,6 +22,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /app/storage
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
     volumes:
       - ./storage:/app/storage
     depends_on:

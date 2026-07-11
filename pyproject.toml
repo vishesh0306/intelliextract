@@ -8,6 +8,7 @@ dependencies = [
     "asyncpg>=0.31.0",
     "boto3>=1.43.46",
     "fastapi>=0.115",
+    "openai>=2.45.0",
     "pillow>=12.3.0",
     "pydantic-settings>=2.14.2",
     "pymupdf>=1.28.0",

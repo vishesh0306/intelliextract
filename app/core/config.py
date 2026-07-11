@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # boxes); the Docker image installs it via apt and needs no override.
     tesseract_cmd: str | None = None
 
+    groq_api_key: str | None = None
+    groq_model: str = "llama-3.3-70b-versatile"
+
 
 @lru_cache
 def get_settings() -> Settings:
