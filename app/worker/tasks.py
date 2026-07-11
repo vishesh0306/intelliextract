@@ -4,9 +4,9 @@ import uuid
 from app.db.session import async_session_factory
 from app.models import Job, JobAttempt, JobResult, JobStatus
 from app.schemas.document import DocumentType
-from app.services.ai_extraction import extract_invoice_fields
 from app.services.extraction import extract_text
 from app.services.file_validation import sniff_content_type
+from app.services.self_correction import run_invoice_self_correction
 from app.storage.factory import get_storage_backend
 
 
@@ -20,14 +20,16 @@ def process_document(job_id: str) -> None:
 
 async def run_extraction(job_id: uuid.UUID) -> None:
     """EXTRACTING: fetch the stored file and pull its raw text (native PDF
-    layer, falling back to OCR). EXTRACTING_AI: for invoices only, send
-    that text to the LLM for structured extraction — other document types
-    have no schema yet (Phase 6 is deliberately one type done well), so
-    they stop at DONE right after extraction, same as Phase 5.
+    layer, falling back to OCR). EXTRACTING_AI / VALIDATING: for invoices
+    only, run the self-correction loop (LLM call -> validate -> re-prompt
+    on failure, up to 3 attempts) — other document types have no schema
+    yet (Phase 6 is deliberately one type done well), so they stop at
+    DONE right after extraction, same as Phase 5.
 
-    No retry loop here — that's Phase 7's self-correction logic, which
-    needs a validation failure reason to feed back into a second prompt.
-    A parse failure here just fails the job outright for now.
+    A job that never passes validation lands on NEEDS_REVIEW, not FAILED —
+    FAILED is reserved for infrastructure problems (unreadable file, LLM
+    API error), NEEDS_REVIEW for "the pipeline worked but isn't confident
+    enough to call it done."
     """
     async with async_session_factory() as session:
         job = await session.get(Job, job_id)
@@ -67,7 +69,7 @@ async def run_extraction(job_id: uuid.UUID) -> None:
         await session.commit()
 
         try:
-            ai_result = await extract_invoice_fields(raw_text)
+            outcome = await run_invoice_self_correction(raw_text)
         except Exception as exc:
             job.status = JobStatus.FAILED
             session.add(
@@ -81,21 +83,29 @@ async def run_extraction(job_id: uuid.UUID) -> None:
             await session.commit()
             return
 
-        session.add(
-            JobAttempt(
-                job_id=job.id,
-                stage="EXTRACTING_AI",
-                attempt_number=1,
-                prompt=ai_result.prompt,
-                raw_llm_response=ai_result.raw_response,
+        for attempt in outcome.attempts:
+            session.add(
+                JobAttempt(
+                    job_id=job.id,
+                    stage="EXTRACTING_AI",
+                    attempt_number=attempt.attempt_number,
+                    prompt=attempt.prompt,
+                    raw_llm_response=attempt.raw_response,
+                    validation_errors=(
+                        [{"field": field, "message": message} for field, message in attempt.errors]
+                        if attempt.errors
+                        else None
+                    ),
+                )
             )
-        )
 
-        if ai_result.parsed is None:
-            job.status = JobStatus.FAILED
-            await session.commit()
-            return
+        job.status = JobStatus.VALIDATING
+        await session.commit()
 
-        result.extracted_json = ai_result.parsed.model_dump(mode="json")
-        job.status = JobStatus.DONE
+        if outcome.fields is not None:
+            result.extracted_json = outcome.fields.model_dump(mode="json")
+        if outcome.confidence_scores is not None:
+            result.confidence_scores = outcome.confidence_scores
+
+        job.status = JobStatus.NEEDS_REVIEW if outcome.needs_review else JobStatus.DONE
         await session.commit()

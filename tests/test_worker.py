@@ -31,6 +31,11 @@ class _FakeLLMClient:
         return self._response
 
 
+class _RaisingLLMClient:
+    async def complete_json(self, *, system_prompt: str, user_prompt: str) -> str:
+        raise RuntimeError("Groq API unreachable")
+
+
 async def _create_job(
     api_key_id, content: bytes, document_type: str, extension: str = ".pdf"
 ) -> Job:
@@ -131,12 +136,14 @@ async def test_run_extraction_invoice_success(api_key_factory, monkeypatch) -> N
         assert result is not None
         assert result.extracted_json["invoice_number"] == "INV-001"
         assert result.extracted_json["total"] == 20.0
+        assert result.confidence_scores["vendor"] == 0.95
 
         await session.refresh(refreshed, attribute_names=["attempts"])
         ai_attempts = [a for a in refreshed.attempts if a.stage == "EXTRACTING_AI"]
         assert len(ai_attempts) == 1
         assert ai_attempts[0].raw_llm_response == VALID_INVOICE_JSON
         assert ai_attempts[0].prompt is not None
+        assert ai_attempts[0].validation_errors is None
 
         await session.delete(refreshed)
         await session.commit()
@@ -144,7 +151,14 @@ async def test_run_extraction_invoice_success(api_key_factory, monkeypatch) -> N
     _cleanup_stored_file(job.s3_key)
 
 
-async def test_run_extraction_invoice_ai_parse_failure(api_key_factory, monkeypatch) -> None:
+async def test_run_extraction_invoice_needs_review_after_exhausting_retries(
+    api_key_factory, monkeypatch
+) -> None:
+    """A response that never passes validation (malformed JSON every
+    attempt) exhausts all 3 tries and lands on NEEDS_REVIEW, not FAILED —
+    FAILED is reserved for infrastructure problems, not "the model
+    couldn't produce a valid extraction."
+    """
     monkeypatch.setattr(
         ai_extraction, "get_llm_client", lambda: _FakeLLMClient("not valid json at all")
     )
@@ -157,12 +171,41 @@ async def test_run_extraction_invoice_ai_parse_failure(api_key_factory, monkeypa
     async with async_session_factory() as session:
         refreshed = await session.get(Job, job.id)
         assert refreshed is not None
+        assert refreshed.status == JobStatus.NEEDS_REVIEW
+
+        result = await session.get(JobResult, job.id)
+        assert result is not None
+        assert result.extracted_json is None
+
+        await session.refresh(refreshed, attribute_names=["attempts"])
+        ai_attempts = [a for a in refreshed.attempts if a.stage == "EXTRACTING_AI"]
+        assert len(ai_attempts) == 3
+        assert all(a.raw_llm_response == "not valid json at all" for a in ai_attempts)
+        assert all(a.validation_errors is not None for a in ai_attempts)
+
+        await session.delete(refreshed)
+        await session.commit()
+
+    _cleanup_stored_file(job.s3_key)
+
+
+async def test_run_extraction_marks_failed_on_llm_exception(api_key_factory, monkeypatch) -> None:
+    monkeypatch.setattr(ai_extraction, "get_llm_client", lambda: _RaisingLLMClient())
+    _, api_key = await api_key_factory()
+    content = build_native_pdf("INVOICE #INV-003")
+    job = await _create_job(api_key.id, content, document_type="invoice")
+
+    await run_extraction(job.id)
+
+    async with async_session_factory() as session:
+        refreshed = await session.get(Job, job.id)
+        assert refreshed is not None
         assert refreshed.status == JobStatus.FAILED
 
         await session.refresh(refreshed, attribute_names=["attempts"])
         ai_attempts = [a for a in refreshed.attempts if a.stage == "EXTRACTING_AI"]
         assert len(ai_attempts) == 1
-        assert ai_attempts[0].raw_llm_response == "not valid json at all"
+        assert "unreachable" in ai_attempts[0].validation_errors["error"]
 
         await session.delete(refreshed)
         await session.commit()

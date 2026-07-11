@@ -52,3 +52,23 @@ async def test_extract_invoice_fields_handles_missing_required_field(monkeypatch
     result = await ai_extraction.extract_invoice_fields("some raw invoice text")
 
     assert result.parsed is None
+
+
+async def test_malformed_json_populates_parse_errors(monkeypatch) -> None:
+    monkeypatch.setattr(ai_extraction, "get_llm_client", lambda: _FakeLLMClient("not json at all"))
+
+    result = await ai_extraction.extract_invoice_fields("some raw invoice text")
+
+    assert result.parse_errors != []
+
+
+async def test_previous_errors_are_embedded_in_the_reprompt(monkeypatch) -> None:
+    monkeypatch.setattr(ai_extraction, "get_llm_client", lambda: _FakeLLMClient(VALID_INVOICE_JSON))
+
+    result = await ai_extraction.extract_invoice_fields(
+        "some raw invoice text",
+        previous_errors=["Line item amounts sum to 20.00 but total is 999.00."],
+    )
+
+    assert "999.00" in result.prompt
+    assert "previous extraction" in result.prompt.lower()

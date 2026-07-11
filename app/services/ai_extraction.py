@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
@@ -28,30 +28,54 @@ class AIExtractionResult:
     parsed: InvoiceFields | None
     prompt: str
     raw_response: str
+    # (field, message) pairs from Pydantic when `parsed` is None — empty
+    # whenever parsing succeeded, same shape as validate_invoice()'s
+    # business-rule errors so callers handle both uniformly.
+    parse_errors: list[tuple[str, str]] = field(default_factory=list)
 
 
-async def extract_invoice_fields(raw_text: str) -> AIExtractionResult:
-    """Single LLM call, best-effort parse. No retry loop here — that's
-    Phase 7's self-correction logic, which needs a validation failure
-    reason to feed back into a second prompt. This just proves the
-    prompt -> structured-JSON path works end-to-end.
+async def extract_invoice_fields(
+    raw_text: str, *, previous_errors: list[str] | None = None
+) -> AIExtractionResult:
+    """One LLM call, best-effort parsed against InvoiceFields.
+
+    Pass `previous_errors` (from a prior attempt's schema or business-rule
+    validation) to re-prompt with exactly what went wrong — the
+    self-correction loop in app/services/self_correction.py drives this
+    across retries; this function itself has no retry logic of its own.
     """
     schema_json = json.dumps(InvoiceFields.model_json_schema())
     system_prompt = _INVOICE_SYSTEM_PROMPT.format(schema=schema_json)
 
+    user_prompt = raw_text
+    if previous_errors:
+        errors_text = "\n".join(f"- {message}" for message in previous_errors)
+        user_prompt = (
+            f"{raw_text}\n\n"
+            f"Your previous extraction of this same document had the following "
+            f"problems. Fix them and re-extract:\n{errors_text}"
+        )
+
     raw_response = await get_llm_client().complete_json(
-        system_prompt=system_prompt, user_prompt=raw_text
+        system_prompt=system_prompt, user_prompt=user_prompt
     )
 
+    parse_errors: list[tuple[str, str]] = []
     try:
         parsed = InvoiceFields.model_validate_json(raw_response)
-    except ValidationError:
+    except ValidationError as exc:
         parsed = None
+        parse_errors = [
+            (".".join(str(part) for part in err["loc"]) or "root", err["msg"])
+            for err in exc.errors()
+        ]
 
     prompt_record = json.dumps(
         [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": raw_text},
+            {"role": "user", "content": user_prompt},
         ]
     )
-    return AIExtractionResult(parsed=parsed, prompt=prompt_record, raw_response=raw_response)
+    return AIExtractionResult(
+        parsed=parsed, prompt=prompt_record, raw_response=raw_response, parse_errors=parse_errors
+    )
