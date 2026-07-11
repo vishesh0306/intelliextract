@@ -6,6 +6,10 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://intelliextract:intelliextract@postgres:5432/intelliextract
       REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /app/storage
+    volumes:
+      - ./storage:/app/storage
     depends_on:
       - postgres
       - redis

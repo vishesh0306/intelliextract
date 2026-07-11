@@ -21,8 +21,9 @@ __pycache__/
 Vishesh_Dudeja_Resume_Backend.md
 BUILD_PROMPT.md
 
-# Local dev storage (Phase 3 local filesystem storage backend)
-storage/
+# Local dev storage (Phase 3 local filesystem storage backend) — root only,
+# not app/storage/ which is source code
+/storage/
 
 # Coverage
 htmlcov/

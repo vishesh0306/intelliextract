@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.v1 import ping
+from app.api.v1 import documents, ping
 
 app = FastAPI(
     title="IntelliExtract",
@@ -9,6 +9,7 @@ app = FastAPI(
 )
 
 app.include_router(ping.router, prefix="/api/v1", tags=["debug"])
+app.include_router(documents.router, prefix="/api/v1", tags=["documents"])
 
 
 @app.get("/healthz")
