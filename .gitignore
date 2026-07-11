@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+.claude/
+
+# Personal/meta docs (not project deliverables — kept locally only)
+Vishesh_Dudeja_Resume_Backend.md
+BUILD_PROMPT.md
+
+# Local dev storage (Phase 3 local filesystem storage backend)
+storage/
+
+# Coverage
+htmlcov/
+.coverage
