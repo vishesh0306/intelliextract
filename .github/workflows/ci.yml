@@ -30,6 +30,32 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: intelliextract
+          POSTGRES_PASSWORD: intelliextract
+          POSTGRES_DB: intelliextract
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://intelliextract:intelliextract@localhost:5432/intelliextract
+      REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +69,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-groups
+
+      - name: Run migrations
+        run: uv run alembic upgrade head
 
       - name: Run tests
         run: uv run pytest
