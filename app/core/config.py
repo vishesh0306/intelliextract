@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
 
+    # Gates POST /api/v1/auth/keys (X-Admin-Key header). Unset by default,
+    # which makes that endpoint always return 403 — deliberately closed
+    # until an operator opts in, rather than open by default.
+    admin_api_key: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

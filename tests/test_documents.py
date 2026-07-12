@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 from app.core.config import get_settings
 from app.db.session import async_session_factory
-from app.models import Job, JobResult, JobStatus
+from app.models import Job, JobAttempt, JobResult, JobStatus
 from app.storage.factory import get_storage_backend
 from app.worker.tasks import process_document
 
@@ -273,6 +273,102 @@ async def test_upload_not_cached_across_different_document_types(
 
     await _cleanup_job(str(cached_job.id), cached_job.file_hash)
     await _cleanup_job(response.json()["job_id"], cached_job.file_hash)
+
+
+async def test_list_documents_scoped_to_caller_and_paginated(client, api_key_factory) -> None:
+    raw_key, api_key = await api_key_factory()
+    other_key, other_api_key = await api_key_factory()
+
+    jobs = [
+        await _create_completed_job(api_key.id, PDF_BYTES + str(i).encode(), "generic")
+        for i in range(3)
+    ]
+    other_job = await _create_completed_job(other_api_key.id, PDF_BYTES + b"other", "generic")
+
+    try:
+        response = await client.get(
+            "/api/v1/documents", headers={"X-API-Key": raw_key}, params={"limit": 2, "offset": 0}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 3
+        assert body["limit"] == 2
+        assert len(body["items"]) == 2
+        returned_ids = {item["job_id"] for item in body["items"]}
+        assert str(other_job.id) not in returned_ids
+
+        other_response = await client.get("/api/v1/documents", headers={"X-API-Key": other_key})
+        assert other_response.json()["total"] == 1
+    finally:
+        for job in [*jobs, other_job]:
+            await _cleanup_job(str(job.id), job.file_hash)
+
+
+async def test_get_document_audit_requires_auth(client) -> None:
+    response = await client.get(f"/api/v1/documents/{uuid.uuid4()}/audit")
+    assert response.status_code == 401
+
+
+async def test_get_document_audit_returns_404_for_foreign_job(client, api_key_factory) -> None:
+    _, owner_api_key = await api_key_factory()
+    other_key, _ = await api_key_factory()
+    job = await _create_completed_job(owner_api_key.id, PDF_BYTES, "generic")
+
+    try:
+        response = await client.get(
+            f"/api/v1/documents/{job.id}/audit", headers={"X-API-Key": other_key}
+        )
+        assert response.status_code == 404
+    finally:
+        await _cleanup_job(str(job.id), job.file_hash)
+
+
+async def test_get_document_audit_returns_full_attempt_history(client, api_key_factory) -> None:
+    raw_key, api_key = await api_key_factory()
+    job = await _create_completed_job(api_key.id, PDF_BYTES, "invoice")
+
+    async with async_session_factory() as session:
+        session.add(
+            JobAttempt(
+                job_id=job.id,
+                stage="EXTRACTING_AI",
+                attempt_number=1,
+                prompt="prompt one",
+                raw_llm_response="bad response",
+                validation_errors=[{"field": "total", "message": "mismatch"}],
+            )
+        )
+        session.add(
+            JobAttempt(
+                job_id=job.id,
+                stage="EXTRACTING_AI",
+                attempt_number=2,
+                prompt="prompt two",
+                raw_llm_response="good response",
+                validation_errors=None,
+            )
+        )
+        await session.commit()
+
+    try:
+        response = await client.get(
+            f"/api/v1/documents/{job.id}/audit", headers={"X-API-Key": raw_key}
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["job_id"] == str(job.id)
+        assert body["raw_text"] == "cached raw text"
+        assert len(body["attempts"]) == 2
+        assert body["attempts"][0]["attempt_number"] == 1
+        assert body["attempts"][0]["validation_errors"] == [
+            {"field": "total", "message": "mismatch"}
+        ]
+        assert body["attempts"][1]["attempt_number"] == 2
+        assert body["attempts"][1]["validation_errors"] is None
+    finally:
+        await _cleanup_job(str(job.id), job.file_hash)
 
 
 async def test_upload_not_cached_when_only_needs_review_job_exists(

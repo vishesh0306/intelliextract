@@ -8,9 +8,12 @@ from app.models import ApiKey
 router = APIRouter()
 
 
-@router.get("/_ping")
+@router.get(
+    "/_ping",
+    summary="Debug: auth + rate-limit check",
+    description="Not part of the real API surface — a minimal protected route "
+    "used to test the auth/rate-limit dependency chain in isolation from "
+    "the upload endpoint's complexity.",
+)
 async def ping(api_key: Annotated[ApiKey, Depends(enforce_rate_limit)]) -> dict[str, str]:
-    """Phase-2 scaffold proving the auth + rate-limit dependency chain
-    works end-to-end. Superseded by real endpoints from Phase 3 onward.
-    """
     return {"status": "ok", "owner": api_key.owner_name}
