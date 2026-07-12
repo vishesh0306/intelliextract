@@ -23,6 +23,7 @@ class DocumentType(enum.StrEnum):
 class DocumentUploadResponse(BaseModel):
     job_id: uuid.UUID
     status: JobStatus
+    cached: bool = False
 
 
 class JobStatusResponse(BaseModel):
