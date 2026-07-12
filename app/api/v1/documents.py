@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from typing import Annotated
 
+import structlog
 from fastapi import (
     APIRouter,
     Depends,
@@ -37,6 +38,7 @@ from app.worker.queue import get_task_queue
 from app.worker.tasks import process_document
 
 router = APIRouter()
+logger = structlog.get_logger()
 
 # Every route here requires auth + is rate-limited, so 401/429 are always
 # possible; merged with route-specific error responses below for Swagger.
@@ -111,6 +113,10 @@ async def upload_document(
     cached_job = await _find_cache_hit(db, file_hash=file_hash, document_type=document_type)
     if cached_job is not None:
         new_job = await _clone_from_cache(db, cached_job=cached_job, api_key=api_key)
+        structlog.contextvars.bind_contextvars(job_id=str(new_job.id))
+        logger.info(
+            "job_cache_hit", document_type=document_type.value, source_job_id=str(cached_job.id)
+        )
         response.status_code = status.HTTP_200_OK
         return DocumentUploadResponse(job_id=new_job.id, status=new_job.status, cached=True)
 
@@ -128,7 +134,11 @@ async def upload_document(
     db.add(job)
     await db.commit()
 
+    structlog.contextvars.bind_contextvars(job_id=str(job.id))
+    logger.info("job_created", document_type=document_type.value)
+
     get_task_queue().enqueue(process_document, str(job.id))
+    logger.info("job_enqueued")
 
     return DocumentUploadResponse(job_id=job.id, status=job.status, cached=False)
 
@@ -166,6 +176,7 @@ async def _clone_from_cache(db: AsyncSession, *, cached_job: Job, api_key: ApiKe
         file_hash=cached_job.file_hash,
         s3_key=cached_job.s3_key,
         status=JobStatus.DONE,
+        cached=True,
     )
     db.add(new_job)
     await db.flush()
@@ -186,6 +197,7 @@ async def _clone_from_cache(db: AsyncSession, *, cached_job: Job, api_key: ApiKe
 
 
 async def _get_owned_job(db: AsyncSession, job_id: uuid.UUID, api_key: ApiKey) -> Job:
+    structlog.contextvars.bind_contextvars(job_id=str(job_id))
     job = await db.get(Job, job_id)
     if job is None or job.api_key_id != api_key.id:
         # Same 404 either way — confirming a job ID belongs to someone
