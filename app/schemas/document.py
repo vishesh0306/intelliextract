@@ -1,8 +1,9 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models import JobStatus
 
@@ -88,3 +89,31 @@ class JobListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class DocumentQueryRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={"examples": [{"fields": ["vendor_name", "total_amount"]}]}
+    )
+
+    fields: list[str] | None = Field(
+        default=None,
+        description="Field names to extract, used verbatim as the response's JSON keys. "
+        "Omit or leave empty to let the model choose whatever fields it judges relevant.",
+    )
+
+
+class DocumentQueryResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    "result": {"vendor_name": "Acme Corp", "total_amount": 1250.0},
+                }
+            ]
+        }
+    )
+
+    job_id: uuid.UUID
+    result: dict[str, Any]

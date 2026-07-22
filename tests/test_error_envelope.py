@@ -1,4 +1,9 @@
+import json
 import uuid
+
+from starlette.requests import Request
+
+from app.core.error_handlers import unhandled_exception_handler
 
 
 async def test_missing_api_key_uses_consistent_error_envelope(client) -> None:
@@ -50,3 +55,29 @@ async def test_validation_error_uses_consistent_error_envelope(client, api_key_f
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+async def test_unhandled_exception_handler_returns_consistent_error_envelope() -> None:
+    """Unit-tests the handler function directly rather than through the
+    full ASGI stack: httpx's test transport deliberately re-raises any
+    unhandled exception into the test (raise_app_exceptions=True is the
+    right default — it's what makes every OTHER test in this suite fail
+    loudly on an unexpected 500 instead of silently passing), which means
+    it can't be used to inspect what a real deployed server would have
+    sent back. The handler itself is what matters here.
+
+    Real-world trigger for adding this handler: GROQ_API_KEY was missing
+    from the api container's env (the query endpoint calls Groq directly,
+    unlike the worker-only pipeline), which raised a raw openai.OpenAIError
+    that reached the client as a bare "Internal Server Error" with no JSON
+    body at all, before this handler existed.
+    """
+    request = Request(scope={"type": "http", "method": "GET", "path": "/whatever", "headers": []})
+    exc = RuntimeError("simulated unexpected failure")
+
+    response = await unhandled_exception_handler(request, exc)
+
+    assert response.status_code == 500
+    body = json.loads(response.body)
+    assert body["error"]["code"] == "INTERNAL_ERROR"
+    assert "simulated unexpected failure" not in body["error"]["message"]

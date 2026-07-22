@@ -33,6 +33,10 @@ def configure_logging() -> None:
         foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            # Formats an exc_info=<exception> kwarg into a proper traceback
+            # string before rendering — without this, exceptions logged via
+            # logger.error(..., exc_info=exc) don't actually show up.
+            structlog.processors.format_exc_info,
             structlog.processors.JSONRenderer(),
         ],
     )

@@ -99,7 +99,9 @@ async def test_metrics_counts_and_average_reflect_new_jobs(client, api_key_facto
                     Job.status == JobStatus.DONE, Job.cached.is_(False)
                 )
             )
-        assert _extract_avg_seconds(after_body) == pytest.approx(expected_avg, abs=0.01)
+        # Postgres's AVG() comes back as a Decimal via asyncpg; pytest.approx
+        # can't subtract Decimal from float internally, so cast first.
+        assert _extract_avg_seconds(after_body) == pytest.approx(float(expected_avg), abs=0.01)
     finally:
         async with async_session_factory() as session:
             for job in all_jobs:

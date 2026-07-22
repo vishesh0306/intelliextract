@@ -82,6 +82,12 @@ caller check back.
    validation error) are stored, linked to the job.
 9. **Retrieve** — the client polls `GET /documents/{id}` for status, or
    `GET /documents/{id}/audit` for the complete extraction history.
+10. **Ask anything** — `POST /documents/{id}/query` runs a fresh,
+    ad-hoc LLM call against the document's already-extracted text,
+    independent of the fixed invoice schema and of `document_type`.
+    Ask for exactly the fields you want (`{"fields": ["vendor_name",
+    "due_date"]}`) or omit `fields` entirely and let the model propose
+    whatever's relevant — works on invoices, resumes, or anything else.
 
 ## API surface
 
@@ -90,6 +96,7 @@ caller check back.
 | `POST` | `/api/v1/documents` | Upload a document, returns `job_id` |
 | `GET` | `/api/v1/documents/{job_id}` | Get status + result |
 | `GET` | `/api/v1/documents/{job_id}/audit` | Full audit trail — raw text, every LLM attempt, validation errors |
+| `POST` | `/api/v1/documents/{job_id}/query` | Ask for specific (or open-ended) fields from any already-processed document |
 | `GET` | `/api/v1/documents` | List jobs for the caller's key (paginated) |
 | `POST` | `/api/v1/auth/keys` | Issue an API key (admin-only, `X-Admin-Key`) |
 | `GET` | `/healthz` | Liveness check |
@@ -157,7 +164,7 @@ on `POST /api/v1/documents`, no curl needed.
 ### Running tests
 
 ```bash
-uv run pytest -v                                    # 57 tests, ~10s
+uv run pytest -v                                    # 71 tests, ~10s
 uv run pytest --cov=app --cov-report=term-missing    # coverage report
 ```
 
@@ -224,6 +231,27 @@ belong to someone else. The clone skips storage entirely (the file's
 already sitting at that content-addressed path) and never touches the
 queue or the LLM.
 
+### Ad-hoc document queries
+
+The invoice pipeline (fixed `InvoiceFields` schema, business-rule
+validation, self-correction retries) stays exactly as-is for
+`document_type=invoice`, because it has something worth validating —
+do the numbers reconcile. But real usage doesn't stop at one schema:
+sometimes you just want "what's the vendor's GSTIN" or "what does this
+resume say about their education," on a document that was never going
+to fit a rigid Pydantic model. `POST /documents/{id}/query`
+(`app/services/generic_extraction.py`) runs a single LLM call against
+the job's already-extracted text — no re-OCR, no dependency on
+`document_type` — with either an exact field list (the response keys
+echo the requested names verbatim) or, if none is given, whatever
+key-value structure the model judges relevant to that specific
+document. There's no business-rule validation here — there's no
+generalizable "does this reconcile" check for an arbitrary field on an
+arbitrary document — but there is one lightweight retry if the model's
+response isn't valid JSON, and every call is still recorded in the
+job's audit trail (`stage: CUSTOM_QUERY`) alongside the original
+extraction attempts.
+
 ### Observability
 
 Structured JSON logging via `structlog`, integrated with stdlib
@@ -256,7 +284,7 @@ Headline results:
 
 ## Test coverage
 
-**92% overall** (`uv run pytest --cov=app`), with the extraction and
+**93% overall** (`uv run pytest --cov=app`), with the extraction and
 validation logic the spec calls out specifically — `app/services/
 extraction.py` and `app/services/validation.py` — at **100%**. CI
 enforces a 70% floor (`--cov-fail-under=70`).

@@ -1,9 +1,12 @@
+import structlog
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.schemas.errors import ErrorCode, ErrorDetail, ErrorResponse
+
+logger = structlog.get_logger()
 
 # Fallback only — every HTTPException we raise ourselves passes an explicit
 # {"code": ..., "message": ...} detail (see app/api/deps.py,
@@ -48,3 +51,19 @@ async def validation_exception_handler(
         f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}" for err in exc.errors()
     )
     return _error_response(422, ErrorCode.VALIDATION_ERROR, message)
+
+
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Without this, anything that isn't an HTTPException (a missing env
+    var, an unexpected library error) falls through to FastAPI's default
+    handler — a bare "Internal Server Error" with no JSON body, breaking
+    the "every error uses the same envelope" promise. The real exception
+    is logged server-side (with the request/job_id context already bound
+    by the logging middleware); the client only gets a generic message —
+    exception details are an internal implementation detail, not
+    something to hand back to an API caller.
+    """
+    logger.error("unhandled_exception", exc_info=exc)
+    return _error_response(
+        500, ErrorCode.INTERNAL_ERROR, "An unexpected error occurred. Please try again."
+    )

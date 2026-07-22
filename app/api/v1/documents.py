@@ -24,6 +24,8 @@ from app.db.session import get_db
 from app.models import ApiKey, Job, JobAttempt, JobResult, JobStatus
 from app.schemas.document import (
     AttemptDetail,
+    DocumentQueryRequest,
+    DocumentQueryResponse,
     DocumentType,
     DocumentUploadResponse,
     JobAuditResponse,
@@ -33,6 +35,7 @@ from app.schemas.document import (
 )
 from app.schemas.errors import ErrorCode, ErrorResponse
 from app.services.file_validation import EXTENSION_BY_CONTENT_TYPE, sniff_content_type
+from app.services.generic_extraction import run_document_query
 from app.storage.factory import get_storage_backend
 from app.worker.queue import get_task_queue
 from app.worker.tasks import process_document
@@ -308,3 +311,73 @@ async def get_document_audit(
             for attempt in attempts
         ],
     )
+
+
+@router.post(
+    "/documents/{job_id}/query",
+    response_model=DocumentQueryResponse,
+    summary="Ask for specific fields from an already-processed document",
+    description="Works on any document regardless of document_type — "
+    "invoice, resume, receipt, generic. Runs a single LLM call against "
+    "the document's already-extracted text (no re-OCR); doesn't touch "
+    "or require the structured invoice pipeline. Pass `fields` to get "
+    "exactly those keys back, or omit it to let the model pick whatever "
+    "fields it judges relevant. Every call is recorded in the job's "
+    "audit trail alongside the original extraction attempts.",
+    responses={
+        **_AUTH_RESPONSES,
+        **_NOT_FOUND_RESPONSE,
+        409: {
+            "model": ErrorResponse,
+            "description": "No extracted text available yet for this job",
+        },
+    },
+)
+async def query_document(
+    job_id: uuid.UUID,
+    body: DocumentQueryRequest,
+    api_key: Annotated[ApiKey, Depends(enforce_rate_limit)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> DocumentQueryResponse:
+    job = await _get_owned_job(db, job_id, api_key)
+
+    result_row = await db.get(JobResult, job.id)
+    if result_row is None or not result_row.raw_text:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": ErrorCode.DOCUMENT_NOT_READY,
+                "message": "No extracted text is available for this job yet "
+                "(still processing, or text extraction failed)",
+            },
+        )
+
+    outcome = await run_document_query(result_row.raw_text, body.fields)
+    logger.info(
+        "job_custom_query",
+        requested_fields=body.fields,
+        parse_error=outcome.parse_error,
+    )
+
+    prior_attempts = await db.scalar(
+        select(func.count())
+        .select_from(JobAttempt)
+        .where(JobAttempt.job_id == job.id, JobAttempt.stage == "CUSTOM_QUERY")
+    )
+    db.add(
+        JobAttempt(
+            job_id=job.id,
+            stage="CUSTOM_QUERY",
+            attempt_number=(prior_attempts or 0) + 1,
+            prompt=outcome.prompt,
+            raw_llm_response=outcome.raw_response,
+            validation_errors=(
+                [{"field": "_response", "message": outcome.parse_error}]
+                if outcome.parse_error
+                else None
+            ),
+        )
+    )
+    await db.commit()
+
+    return DocumentQueryResponse(job_id=job.id, result=outcome.result)
